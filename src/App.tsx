@@ -418,10 +418,10 @@ function Sidebar({
           {" "}
           CONTROLS
         </Text>
-        <Text dimColor> 1-4 Navigate</Text>
+        <Text dimColor> H/S/L/Q Nav</Text>
         <Text dimColor> ↑↓←→ Move</Text>
         <Text dimColor> Enter Select</Text>
-        <Text dimColor> Q/q Add queue</Text>
+        <Text dimColor> A Add queue</Text>
         <Text dimColor> Esc Back</Text>
         <Text dimColor> Ctrl+C Quit</Text>
       </Box>
@@ -436,11 +436,13 @@ function TrackList({
   selectedIdx,
   title,
   showArtist = true,
+  currentTrackId,
 }: {
   modules: ModuleWithArtist[];
   selectedIdx: number;
   title: string;
   showArtist?: boolean;
+  currentTrackId?: string | null;
 }) {
   const rows = (process.stdout.rows ?? 40) - 10;
   const start = Math.max(0, selectedIdx - Math.floor(rows / 2));
@@ -457,16 +459,25 @@ function TrackList({
       {visible.map((m, i) => {
         const realIdx = start + i;
         const isSelected = realIdx === selectedIdx;
+        const isPlaying = currentTrackId != null && m.id === currentTrackId;
+        const rowColor = isSelected
+          ? "green"
+          : isPlaying
+            ? "blueBright"
+            : "white";
         return (
           <Box key={m.id} paddingX={1} gap={1}>
-            <Text color={isSelected ? "green" : "white"}>
-              {isSelected ? "▸" : " "} {pad(String(realIdx + 1), 3)}
+            <Text color={rowColor}>
+              {isSelected ? "▸" : isPlaying ? "♪" : " "}{" "}
+              {pad(String(realIdx + 1), 3)}
             </Text>
-            <Text color={isSelected ? "green" : "white"} bold={isSelected}>
+            <Text color={rowColor} bold={isSelected || isPlaying}>
               {pad(truncate(m.module_name ?? m.file_name, 28), 29)}
             </Text>
             {showArtist && (
-              <Text color={isSelected ? "white" : "gray"}>
+              <Text
+                color={isSelected ? "white" : isPlaying ? "blueBright" : "gray"}
+              >
                 {pad(truncate(m.artist_name, 18), 19)}
               </Text>
             )}
@@ -689,6 +700,8 @@ interface AppState {
   prevView: View;
   // Search
   searchQuery: string;
+  allModules: ModuleWithArtist[];
+  allArtists: Artist[];
   searchResults: ModuleWithArtist[];
   searchArtistResults: Artist[];
   searchMode: "tracks" | "artists";
@@ -721,6 +734,8 @@ export default function App({ dbPath }: { dbPath?: string }) {
     view: "home",
     prevView: "home",
     searchQuery: "",
+    allModules: [],
+    allArtists: [],
     searchResults: [],
     searchArtistResults: [],
     searchMode: "tracks",
@@ -744,7 +759,18 @@ export default function App({ dbPath }: { dbPath?: string }) {
       const stats = getDbStats();
       const genres = getAllGenres();
       const artists = getTopArtists(9999);
-      setState((s) => ({ ...s, stats, genres, artists }));
+      const allModules = getRecentModules(9999);
+      const allArtists = getAllArtists(9999);
+      setState((s) => ({
+        ...s,
+        stats,
+        genres,
+        artists,
+        allModules,
+        allArtists,
+        searchResults: allModules,
+        searchArtistResults: allArtists,
+      }));
       setReady(true);
     });
   }, []);
@@ -821,15 +847,26 @@ export default function App({ dbPath }: { dbPath?: string }) {
   }, []);
 
   const runSearch = useCallback((query: string) => {
-    if (!query.trim()) return;
-    const results = searchModules(query, 9999);
-    const artistResults = searchArtists(query, 9999);
-    setState((s) => ({
-      ...s,
-      searchResults: results,
-      searchArtistResults: artistResults,
-      selectedIdx: 0,
-    }));
+    setState((s) => {
+      const q = query.trim().toLowerCase();
+      const results = q
+        ? s.allModules.filter(
+            (m) =>
+              (m.module_name ?? "").toLowerCase().includes(q) ||
+              (m.file_name ?? "").toLowerCase().includes(q) ||
+              m.artist_name.toLowerCase().includes(q),
+          )
+        : s.allModules;
+      const artistResults = q
+        ? s.allArtists.filter((a) => a.name.toLowerCase().includes(q))
+        : s.allArtists;
+      return {
+        ...s,
+        searchResults: results,
+        searchArtistResults: artistResults,
+        selectedIdx: 0,
+      };
+    });
   }, []);
 
   useInput((input, key) => {
@@ -843,19 +880,19 @@ export default function App({ dbPath }: { dbPath?: string }) {
 
     // Nav shortcuts
     if (!state.isSearchFocused) {
-      if (input === "1") {
+      if (input === "h" || input === "H") {
         navigate("home");
         return;
       }
-      if (input === "2") {
+      if (input === "s" || input === "S") {
         navigate("search");
         return;
       }
-      if (input === "3") {
+      if (input === "l" || input === "L") {
         navigate("library");
         return;
       }
-      if (input === "4") {
+      if (input === "q" || input === "Q") {
         navigate("queue");
         return;
       }
@@ -878,7 +915,7 @@ export default function App({ dbPath }: { dbPath?: string }) {
         return;
       }
 
-      if (input === "s" || input === "S") {
+      if (input === "z" || input === "Z") {
         Player.toggleShuffle();
         return;
       }
@@ -973,16 +1010,21 @@ export default function App({ dbPath }: { dbPath?: string }) {
       }
       if (state.isSearchFocused) {
         if (key.return) {
-          runSearch(state.searchQuery);
           setState((s) => ({ ...s, isSearchFocused: false }));
           return;
         }
         if (key.backspace || key.delete) {
-          setState((s) => ({ ...s, searchQuery: s.searchQuery.slice(0, -1) }));
+          setState((s) => {
+            const q = s.searchQuery.slice(0, -1);
+            return { ...s, searchQuery: q };
+          });
+          runSearch(state.searchQuery.slice(0, -1));
           return;
         }
         if (input && input.length === 1) {
-          setState((s) => ({ ...s, searchQuery: s.searchQuery + input }));
+          const newQuery = state.searchQuery + input;
+          setState((s) => ({ ...s, searchQuery: newQuery }));
+          runSearch(newQuery);
           return;
         }
       }
@@ -1157,8 +1199,9 @@ export default function App({ dbPath }: { dbPath?: string }) {
                   minWidth={30}
                 >
                   <Text color={state.isSearchFocused ? "white" : "gray"}>
-                    {state.searchQuery ||
-                      (state.isSearchFocused ? "" : "Press / to type…")}
+                    {state.searchQuery || state.isSearchFocused
+                      ? state.searchQuery
+                      : "Press / to search…"}
                     {state.isSearchFocused && <Text color="green">█</Text>}
                   </Text>
                 </Box>
@@ -1190,9 +1233,12 @@ export default function App({ dbPath }: { dbPath?: string }) {
                 <TrackList
                   modules={state.searchResults}
                   selectedIdx={state.selectedIdx}
+                  currentTrackId={
+                    state.playerState.queue[state.playerState.currentIndex]?.id
+                  }
                   title={
                     state.searchResults.length > 0
-                      ? `Tracks (${state.searchResults.length})`
+                      ? `Tracks (${state.searchQuery ? state.searchResults.length + " results" : state.searchResults.length})`
                       : "Enter a search term"
                   }
                 />
@@ -1256,14 +1302,15 @@ export default function App({ dbPath }: { dbPath?: string }) {
                     {state.focusedArtist.module_count ?? "?"} modules
                   </Text>
                   <Stars rating={state.focusedArtist.rating} />
-                  <Text dimColor>
-                    [Esc] back [Enter] play all from here [Q] add to queue
-                  </Text>
+                  <Text dimColor>[Esc] back [Enter] play [A] add to queue</Text>
                 </Box>
               </Box>
               <TrackList
                 modules={state.artistModules}
                 selectedIdx={state.selectedIdx}
+                currentTrackId={
+                  state.playerState.queue[state.playerState.currentIndex]?.id
+                }
                 title={`Tracks (${state.artistModules.length})`}
                 showArtist={false}
               />
@@ -1276,11 +1323,14 @@ export default function App({ dbPath }: { dbPath?: string }) {
                 <Text color="green" bold>
                   ♪ {state.focusedGenre.name.toUpperCase()}
                 </Text>
-                <Text dimColor>[Esc] back [Enter] play [Q] add to queue</Text>
+                <Text dimColor>[Esc] back [Enter] play [A] add to queue</Text>
               </Box>
               <TrackList
                 modules={state.genreModules}
                 selectedIdx={state.selectedIdx}
+                currentTrackId={
+                  state.playerState.queue[state.playerState.currentIndex]?.id
+                }
                 title={`Tracks in ${state.focusedGenre.name} (${state.genreModules.length})`}
               />
             </Box>
@@ -1307,6 +1357,9 @@ export default function App({ dbPath }: { dbPath?: string }) {
                 <TrackList
                   modules={state.playerState.queue}
                   selectedIdx={state.selectedIdx}
+                  currentTrackId={
+                    state.playerState.queue[state.playerState.currentIndex]?.id
+                  }
                   title=""
                 />
               )}
