@@ -16,6 +16,9 @@ import {
   getAllGenres,
   getDbStats,
   setModuleLocalPath,
+  setModuleFavorite,
+  getFavorites,
+  getDownloadedModules,
   Artist,
   ModuleWithArtist,
   Genre,
@@ -254,6 +257,7 @@ const NAV: NavItem[] = [
   { label: "Search", view: "search", icon: "⌕" },
   { label: "Library", view: "library", icon: "▤" },
   { label: "Queue", view: "queue", icon: "≡" },
+  { label: "Playlists", view: "playlists", icon: "▶" },
 ];
 
 // ─── Utility components ──────────────────────────────────────────────────────
@@ -418,7 +422,7 @@ function Sidebar({
           {" "}
           CONTROLS
         </Text>
-        <Text dimColor> H/S/L/Q Nav</Text>
+        <Text dimColor> H/S/L/Q/F Nav</Text>
         <Text dimColor> ↑↓←→ Move</Text>
         <Text dimColor> Enter Select</Text>
         <Text dimColor> A Add queue</Text>
@@ -436,13 +440,11 @@ function TrackList({
   selectedIdx,
   title,
   showArtist = true,
-  currentTrackId,
 }: {
   modules: ModuleWithArtist[];
   selectedIdx: number;
   title: string;
   showArtist?: boolean;
-  currentTrackId?: string | null;
 }) {
   const rows = (process.stdout.rows ?? 40) - 10;
   const start = Math.max(0, selectedIdx - Math.floor(rows / 2));
@@ -459,28 +461,20 @@ function TrackList({
       {visible.map((m, i) => {
         const realIdx = start + i;
         const isSelected = realIdx === selectedIdx;
-        const isPlaying = currentTrackId != null && m.id === currentTrackId;
-        const rowColor = isSelected
-          ? "green"
-          : isPlaying
-            ? "blueBright"
-            : "white";
         return (
           <Box key={m.id} paddingX={1} gap={1}>
-            <Text color={rowColor}>
-              {isSelected ? "▸" : isPlaying ? "♪" : " "}{" "}
-              {pad(String(realIdx + 1), 3)}
+            <Text color={isSelected ? "green" : "white"}>
+              {isSelected ? "▸" : " "} {pad(String(realIdx + 1), 3)}
             </Text>
-            <Text color={rowColor} bold={isSelected || isPlaying}>
+            <Text color={isSelected ? "green" : "white"} bold={isSelected}>
               {pad(truncate(m.module_name ?? m.file_name, 28), 29)}
             </Text>
             {showArtist && (
-              <Text
-                color={isSelected ? "white" : isPlaying ? "blueBright" : "gray"}
-              >
+              <Text color={isSelected ? "white" : "gray"}>
                 {pad(truncate(m.artist_name, 18), 19)}
               </Text>
             )}
+            {m.favorite ? <Text color="red">♥</Text> : <Text> </Text>}
             <Text dimColor>{truncate(m.genres.join(", "), 18)}</Text>
           </Box>
         );
@@ -700,9 +694,11 @@ interface AppState {
   prevView: View;
   // Search
   searchQuery: string;
+  searchResults: ModuleWithArtist[];
+  favorites: ModuleWithArtist[];
+  downloaded: ModuleWithArtist[];
   allModules: ModuleWithArtist[];
   allArtists: Artist[];
-  searchResults: ModuleWithArtist[];
   searchArtistResults: Artist[];
   searchMode: "tracks" | "artists";
   // Library
@@ -734,8 +730,6 @@ export default function App({ dbPath }: { dbPath?: string }) {
     view: "home",
     prevView: "home",
     searchQuery: "",
-    allModules: [],
-    allArtists: [],
     searchResults: [],
     searchArtistResults: [],
     searchMode: "tracks",
@@ -751,6 +745,10 @@ export default function App({ dbPath }: { dbPath?: string }) {
     stats: { artists: 0, modules: 0, genres: 0 },
     isSearchFocused: false,
     downloadStatus: null,
+    favorites: [],
+    downloaded: [],
+    allModules: [],
+    allArtists: [],
   });
 
   // Init DB
@@ -761,6 +759,8 @@ export default function App({ dbPath }: { dbPath?: string }) {
       const artists = getTopArtists(9999);
       const allModules = getRecentModules(9999);
       const allArtists = getAllArtists(9999);
+      const favorites = getFavorites();
+      const downloaded = getDownloadedModules();
       setState((s) => ({
         ...s,
         stats,
@@ -768,6 +768,8 @@ export default function App({ dbPath }: { dbPath?: string }) {
         artists,
         allModules,
         allArtists,
+        favorites,
+        downloaded,
         searchResults: allModules,
         searchArtistResults: allArtists,
       }));
@@ -779,27 +781,6 @@ export default function App({ dbPath }: { dbPath?: string }) {
   useEffect(() => {
     return Player.subscribe((ps) => {
       setState((s) => ({ ...s, playerState: ps }));
-    });
-  }, []);
-
-  // Register download hook for auto-next/prev — no playingRef guard needed here
-  useEffect(() => {
-    Player.setDownloadHook((mod, cb) => {
-      downloadModule(mod, ({ file, status, error }) => {
-        setState((s) => ({ ...s, downloadStatus: { file, status, error } }));
-        if (status === "done" || status === "exists") {
-          cb();
-          setTimeout(
-            () => setState((s) => ({ ...s, downloadStatus: null })),
-            3000,
-          );
-        } else if (status === "error") {
-          setTimeout(
-            () => setState((s) => ({ ...s, downloadStatus: null })),
-            3000,
-          );
-        }
-      });
     });
   }, []);
 
@@ -847,26 +828,15 @@ export default function App({ dbPath }: { dbPath?: string }) {
   }, []);
 
   const runSearch = useCallback((query: string) => {
-    setState((s) => {
-      const q = query.trim().toLowerCase();
-      const results = q
-        ? s.allModules.filter(
-            (m) =>
-              (m.module_name ?? "").toLowerCase().includes(q) ||
-              (m.file_name ?? "").toLowerCase().includes(q) ||
-              m.artist_name.toLowerCase().includes(q),
-          )
-        : s.allModules;
-      const artistResults = q
-        ? s.allArtists.filter((a) => a.name.toLowerCase().includes(q))
-        : s.allArtists;
-      return {
-        ...s,
-        searchResults: results,
-        searchArtistResults: artistResults,
-        selectedIdx: 0,
-      };
-    });
+    if (!query.trim()) return;
+    const results = searchModules(query, 9999);
+    const artistResults = searchArtists(query, 9999);
+    setState((s) => ({
+      ...s,
+      searchResults: results,
+      searchArtistResults: artistResults,
+      selectedIdx: 0,
+    }));
   }, []);
 
   useInput((input, key) => {
@@ -910,13 +880,12 @@ export default function App({ dbPath }: { dbPath?: string }) {
         Player.nextTrack();
         return;
       }
-      if (input === "p" || input === "P") {
+      if (input === ",") {
         Player.prevTrack();
         return;
       }
-
-      if (input === "z" || input === "Z") {
-        Player.toggleShuffle();
+      if (input === ".") {
+        Player.nextTrack();
         return;
       }
       if (input === "+" || input === "=") {
@@ -989,10 +958,43 @@ export default function App({ dbPath }: { dbPath?: string }) {
       }
 
       // Queue add
-      if (input === "q" || input === "Q") {
+      if (input === "a" || input === "A") {
         const track = getSelectedTrack();
         if (track) {
           Player.addToQueue(track);
+        }
+        return;
+      }
+
+      // Navigate to favorites
+      // Navigate to playlists
+      if (input === "p" || input === "P") {
+        navigate("playlists");
+        return;
+      }
+
+      // Toggle favorite (Ctrl+F)
+      if (key.ctrl && input === "f") {
+        const track = getSelectedTrack();
+        if (track) {
+          const newFav = !track.favorite;
+          setModuleFavorite(track.id, newFav);
+          setState((s) => {
+            const update = (list: ModuleWithArtist[]) =>
+              list.map((m) =>
+                m.id === track.id ? { ...m, favorite: newFav ? 1 : 0 } : m,
+              );
+            return {
+              ...s,
+              allModules: update(s.allModules),
+              searchResults: update(s.searchResults),
+              artistModules: update(s.artistModules),
+              genreModules: update(s.genreModules),
+              favorites: newFav
+                ? [...s.favorites, { ...track, favorite: 1 }]
+                : s.favorites.filter((m) => m.id !== track.id),
+            };
+          });
         }
         return;
       }
@@ -1010,21 +1012,16 @@ export default function App({ dbPath }: { dbPath?: string }) {
       }
       if (state.isSearchFocused) {
         if (key.return) {
+          runSearch(state.searchQuery);
           setState((s) => ({ ...s, isSearchFocused: false }));
           return;
         }
         if (key.backspace || key.delete) {
-          setState((s) => {
-            const q = s.searchQuery.slice(0, -1);
-            return { ...s, searchQuery: q };
-          });
-          runSearch(state.searchQuery.slice(0, -1));
+          setState((s) => ({ ...s, searchQuery: s.searchQuery.slice(0, -1) }));
           return;
         }
         if (input && input.length === 1) {
-          const newQuery = state.searchQuery + input;
-          setState((s) => ({ ...s, searchQuery: newQuery }));
-          runSearch(newQuery);
+          setState((s) => ({ ...s, searchQuery: s.searchQuery + input }));
           return;
         }
       }
@@ -1045,6 +1042,13 @@ export default function App({ dbPath }: { dbPath?: string }) {
         return s.genreModules.length;
       case "queue":
         return s.playerState.queue.length;
+      case "favorites":
+      case "playlist_favorites":
+        return s.favorites.length;
+      case "playlist_downloaded":
+        return s.downloaded.length;
+      case "playlists":
+        return 2;
       default:
         return 0;
     }
@@ -1062,22 +1066,24 @@ export default function App({ dbPath }: { dbPath?: string }) {
         return state.genreModules[state.selectedIdx] ?? null;
       case "queue":
         return state.playerState.queue[state.selectedIdx] ?? null;
+      case "favorites":
+      case "playlist_favorites":
+        return state.favorites[state.selectedIdx] ?? null;
+      case "playlist_downloaded":
+        return state.downloaded[state.selectedIdx] ?? null;
       default:
         return null;
     }
   }
 
-  // Shared helper: download+convert a track then call onReady once.
-  // Uses a ref-based guard so only ONE download/play sequence runs at a time.
   const playingRef = React.useRef(false);
   function triggerDownloadAndPlay(
     track: ModuleWithArtist,
     onReady: () => void,
   ) {
-    if (playingRef.current) return; // prevent double-trigger
+    if (playingRef.current) return;
     playingRef.current = true;
     downloadModule(track, ({ file, status, error }) => {
-      // Only update downloadStatus — never touch list state here
       setState((s) => ({ ...s, downloadStatus: { file, status, error } }));
       if (status === "done" || status === "exists") {
         playingRef.current = false;
@@ -1102,8 +1108,26 @@ export default function App({ dbPath }: { dbPath?: string }) {
     if (view === "search") {
       if (searchMode === "tracks") {
         const track = state.searchResults[selectedIdx];
-        if (track)
-          triggerDownloadAndPlay(track, () => Player.playModule(track));
+        if (track) {
+          downloadModule(track, ({ file, status, error }) => {
+            setState((s) => ({
+              ...s,
+              downloadStatus: { file, status, error },
+            }));
+            if (status === "done" || status === "exists") {
+              Player.playModule(track);
+              setTimeout(
+                () => setState((s) => ({ ...s, downloadStatus: null })),
+                3000,
+              );
+            } else if (status === "error") {
+              setTimeout(
+                () => setState((s) => ({ ...s, downloadStatus: null })),
+                3000,
+              );
+            }
+          });
+        }
       } else {
         const artist = state.searchArtistResults[selectedIdx];
         if (artist) openArtist(artist);
@@ -1124,17 +1148,72 @@ export default function App({ dbPath }: { dbPath?: string }) {
 
     if (view === "artist") {
       const track = state.artistModules[selectedIdx];
-      // Capture list NOW before any async setState can mutate it
-      const queue = state.artistModules.slice();
+      if (track) {
+        downloadModule(track, ({ file, status, error }) => {
+          setState((s) => ({ ...s, downloadStatus: { file, status, error } }));
+          if (status === "done" || status === "exists") {
+            Player.playQueue(state.artistModules, selectedIdx);
+            setTimeout(
+              () => setState((s) => ({ ...s, downloadStatus: null })),
+              3000,
+            );
+          } else if (status === "error") {
+            setTimeout(
+              () => setState((s) => ({ ...s, downloadStatus: null })),
+              3000,
+            );
+          }
+        });
+      }
+      return;
+    }
+
+    if (view === "genre") {
+      const track = state.genreModules[selectedIdx];
+      if (track) {
+        downloadModule(track, ({ file, status, error }) => {
+          setState((s) => ({ ...s, downloadStatus: { file, status, error } }));
+          if (status === "done" || status === "exists") {
+            Player.playQueue(state.genreModules, selectedIdx);
+            setTimeout(
+              () => setState((s) => ({ ...s, downloadStatus: null })),
+              3000,
+            );
+          } else if (status === "error") {
+            setTimeout(
+              () => setState((s) => ({ ...s, downloadStatus: null })),
+              3000,
+            );
+          }
+        });
+      }
+      return;
+    }
+
+    if (view === "playlists") {
+      if (selectedIdx === 0)
+        setState((s) => ({ ...s, view: "playlist_favorites", selectedIdx: 0 }));
+      if (selectedIdx === 1)
+        setState((s) => ({
+          ...s,
+          view: "playlist_downloaded",
+          selectedIdx: 0,
+        }));
+      return;
+    }
+
+    if (view === "favorites" || view === "playlist_favorites") {
+      const track = state.favorites[selectedIdx];
+      const queue = state.favorites.slice();
       const idx = selectedIdx;
       if (track)
         triggerDownloadAndPlay(track, () => Player.playQueue(queue, idx));
       return;
     }
 
-    if (view === "genre") {
-      const track = state.genreModules[selectedIdx];
-      const queue = state.genreModules.slice();
+    if (view === "playlist_downloaded") {
+      const track = state.downloaded[selectedIdx];
+      const queue = state.downloaded.slice();
       const idx = selectedIdx;
       if (track)
         triggerDownloadAndPlay(track, () => Player.playQueue(queue, idx));
@@ -1143,10 +1222,23 @@ export default function App({ dbPath }: { dbPath?: string }) {
 
     if (view === "queue") {
       const track = state.playerState.queue[selectedIdx];
-      const queue = state.playerState.queue.slice();
-      const idx = selectedIdx;
-      if (track)
-        triggerDownloadAndPlay(track, () => Player.playQueue(queue, idx));
+      if (track) {
+        downloadModule(track, ({ file, status, error }) => {
+          setState((s) => ({ ...s, downloadStatus: { file, status, error } }));
+          if (status === "done" || status === "exists") {
+            Player.playQueue(state.playerState.queue, selectedIdx);
+            setTimeout(
+              () => setState((s) => ({ ...s, downloadStatus: null })),
+              3000,
+            );
+          } else if (status === "error") {
+            setTimeout(
+              () => setState((s) => ({ ...s, downloadStatus: null })),
+              3000,
+            );
+          }
+        });
+      }
       return;
     }
   }
@@ -1199,9 +1291,8 @@ export default function App({ dbPath }: { dbPath?: string }) {
                   minWidth={30}
                 >
                   <Text color={state.isSearchFocused ? "white" : "gray"}>
-                    {state.searchQuery || state.isSearchFocused
-                      ? state.searchQuery
-                      : "Press / to search…"}
+                    {state.searchQuery ||
+                      (state.isSearchFocused ? "" : "Press / to type…")}
                     {state.isSearchFocused && <Text color="green">█</Text>}
                   </Text>
                 </Box>
@@ -1233,12 +1324,9 @@ export default function App({ dbPath }: { dbPath?: string }) {
                 <TrackList
                   modules={state.searchResults}
                   selectedIdx={state.selectedIdx}
-                  currentTrackId={
-                    state.playerState.queue[state.playerState.currentIndex]?.id
-                  }
                   title={
                     state.searchResults.length > 0
-                      ? `Tracks (${state.searchQuery ? state.searchResults.length + " results" : state.searchResults.length})`
+                      ? `Tracks (${state.searchResults.length})`
                       : "Enter a search term"
                   }
                 />
@@ -1302,15 +1390,14 @@ export default function App({ dbPath }: { dbPath?: string }) {
                     {state.focusedArtist.module_count ?? "?"} modules
                   </Text>
                   <Stars rating={state.focusedArtist.rating} />
-                  <Text dimColor>[Esc] back [Enter] play [A] add to queue</Text>
+                  <Text dimColor>
+                    [Esc] back [Enter] play all from here [A] add to queue
+                  </Text>
                 </Box>
               </Box>
               <TrackList
                 modules={state.artistModules}
                 selectedIdx={state.selectedIdx}
-                currentTrackId={
-                  state.playerState.queue[state.playerState.currentIndex]?.id
-                }
                 title={`Tracks (${state.artistModules.length})`}
                 showArtist={false}
               />
@@ -1328,11 +1415,121 @@ export default function App({ dbPath }: { dbPath?: string }) {
               <TrackList
                 modules={state.genreModules}
                 selectedIdx={state.selectedIdx}
-                currentTrackId={
-                  state.playerState.queue[state.playerState.currentIndex]?.id
-                }
                 title={`Tracks in ${state.focusedGenre.name} (${state.genreModules.length})`}
               />
+            </Box>
+          )}
+
+          {state.view === "playlists" && (
+            <Box flexDirection="column" gap={1}>
+              <Box paddingX={2} gap={2}>
+                <Text color="green" bold>
+                  ▶ Playlists
+                </Text>
+                <Text dimColor>[Enter] open</Text>
+              </Box>
+              <Box paddingX={2} flexDirection="column" gap={0}>
+                <Box gap={2}>
+                  <Text color={state.selectedIdx === 0 ? "green" : "white"}>
+                    {state.selectedIdx === 0 ? "▸" : " "} ♥ Favorites
+                  </Text>
+                  <Text dimColor>({state.favorites.length} tracks)</Text>
+                </Box>
+                <Box gap={2}>
+                  <Text color={state.selectedIdx === 1 ? "green" : "white"}>
+                    {state.selectedIdx === 1 ? "▸" : " "} ⬇ Downloaded
+                  </Text>
+                  <Text dimColor>({state.downloaded.length} tracks)</Text>
+                </Box>
+              </Box>
+            </Box>
+          )}
+
+          {state.view === "playlist_favorites" && (
+            <Box flexDirection="column" gap={1}>
+              <Box paddingX={2} gap={2}>
+                <Text color="red" bold>
+                  ♥ Favorites
+                </Text>
+                <Text dimColor>
+                  ({state.favorites.length} tracks) [Ctrl+F] toggle ♥ [Esc] back
+                </Text>
+              </Box>
+              {state.favorites.length === 0 ? (
+                <Box paddingX={2} paddingY={2}>
+                  <Text dimColor>
+                    No favorites yet. Press [Ctrl+F] on any track to add it.
+                  </Text>
+                </Box>
+              ) : (
+                <TrackList
+                  modules={state.favorites}
+                  selectedIdx={state.selectedIdx}
+                  currentTrackId={
+                    state.playerState.queue[state.playerState.currentIndex]?.id
+                  }
+                  title={`Favorites (${state.favorites.length})`}
+                />
+              )}
+            </Box>
+          )}
+
+          {state.view === "playlist_downloaded" && (
+            <Box flexDirection="column" gap={1}>
+              <Box paddingX={2} gap={2}>
+                <Text color="cyan" bold>
+                  ⬇ Downloaded
+                </Text>
+                <Text dimColor>
+                  ({state.downloaded.length} tracks) [Esc] back
+                </Text>
+              </Box>
+              {state.downloaded.length === 0 ? (
+                <Box paddingX={2} paddingY={2}>
+                  <Text dimColor>
+                    No downloaded tracks yet. Press [Enter] on any track to
+                    download it.
+                  </Text>
+                </Box>
+              ) : (
+                <TrackList
+                  modules={state.downloaded}
+                  selectedIdx={state.selectedIdx}
+                  currentTrackId={
+                    state.playerState.queue[state.playerState.currentIndex]?.id
+                  }
+                  title={`Downloaded (${state.downloaded.length})`}
+                />
+              )}
+            </Box>
+          )}
+
+          {state.view === "favorites" && (
+            <Box flexDirection="column" gap={1}>
+              <Box paddingX={2} gap={2}>
+                <Text color="red" bold>
+                  ♥ Favorites
+                </Text>
+                <Text dimColor>
+                  ({(state.favorites ?? []).length} tracks) [Ctrl+F] toggle ♥
+                </Text>
+              </Box>
+              {(state.favorites ?? []).length === 0 ? (
+                <Box paddingX={2} paddingY={2}>
+                  <Text dimColor>
+                    No favorites yet. Press [Ctrl+F] on any track to add it.
+                  </Text>
+                </Box>
+              ) : (
+                <TrackList
+                  modules={state.favorites ?? []}
+                  selectedIdx={state.selectedIdx}
+                  currentTrackId={
+                    state.playerState.queue[state.playerState.currentIndex]?.id
+                  }
+                  title=""
+                />
+              )}
             </Box>
           )}
 
@@ -1350,16 +1547,13 @@ export default function App({ dbPath }: { dbPath?: string }) {
               {state.playerState.queue.length === 0 ? (
                 <Box paddingX={2} paddingY={2}>
                   <Text dimColor>
-                    Queue is empty. Press [Q] on any track to add it.
+                    Queue is empty. Press [A] on any track to add it.
                   </Text>
                 </Box>
               ) : (
                 <TrackList
                   modules={state.playerState.queue}
                   selectedIdx={state.selectedIdx}
-                  currentTrackId={
-                    state.playerState.queue[state.playerState.currentIndex]?.id
-                  }
                   title=""
                 />
               )}

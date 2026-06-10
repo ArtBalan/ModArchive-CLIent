@@ -1,6 +1,8 @@
 import * as fs from "fs";
 import * as path from "path";
 
+// ─── Interfaces ───────────────────────────────────────────────────────────────
+
 export interface Artist {
   id: string;
   name: string;
@@ -16,6 +18,7 @@ export interface Module {
   module_name: string | null;
   md5: string | null;
   local_path: string | null;
+  favorite: number; // 0 or 1
 }
 
 export interface Genre {
@@ -29,10 +32,21 @@ export interface ModuleWithArtist extends Module {
   genres: string[];
 }
 
-// We'll use a simple in-memory mock database if no scraper.db found,
-// or load the real one with sql.js
+// ─── Mock data ────────────────────────────────────────────────────────────────
+
 let db: any = null;
 let useMock = false;
+let currentDbPath: string | null = null;
+
+function saveDb(): void {
+  if (!db || !currentDbPath) return;
+  try {
+    const data: Uint8Array = db.export();
+    fs.writeFileSync(currentDbPath, Buffer.from(data));
+  } catch (e) {
+    console.error("[db] Failed to save:", e);
+  }
+}
 
 const MOCK_ARTISTS: Artist[] = [
   { id: "1", name: "Jester", module_count: 12, rating: 4.8, rating_count: 340 },
@@ -72,6 +86,8 @@ const MOCK_MODULES: ModuleWithArtist[] = [
     file_name: "space_debris.xm",
     module_name: "Space Debris",
     md5: "abc123",
+    local_path: null,
+    favorite: 0,
     artist_name: "Jester",
     genres: ["techno", "ambient"],
   },
@@ -81,6 +97,8 @@ const MOCK_MODULES: ModuleWithArtist[] = [
     file_name: "2nd_reality.s3m",
     module_name: "2nd Reality",
     md5: "def456",
+    local_path: null,
+    favorite: 0,
     artist_name: "Skaven",
     genres: ["techno"],
   },
@@ -90,6 +108,8 @@ const MOCK_MODULES: ModuleWithArtist[] = [
     file_name: "stargazer.xm",
     module_name: "Stargazer",
     md5: "ghi789",
+    local_path: null,
+    favorite: 0,
     artist_name: "Purple Motion",
     genres: ["trance", "ambient"],
   },
@@ -99,6 +119,8 @@ const MOCK_MODULES: ModuleWithArtist[] = [
     file_name: "chronic.xm",
     module_name: "Chronic",
     md5: "jkl012",
+    local_path: null,
+    favorite: 0,
     artist_name: "Necros",
     genres: ["electronic"],
   },
@@ -108,6 +130,8 @@ const MOCK_MODULES: ModuleWithArtist[] = [
     file_name: "believe.xm",
     module_name: "Believe",
     md5: "mno345",
+    local_path: null,
+    favorite: 0,
     artist_name: "Basehead",
     genres: ["trance"],
   },
@@ -117,6 +141,8 @@ const MOCK_MODULES: ModuleWithArtist[] = [
     file_name: "elysium.xm",
     module_name: "Elysium",
     md5: "pqr678",
+    local_path: null,
+    favorite: 0,
     artist_name: "Lizardking",
     genres: ["ambient", "chiptune"],
   },
@@ -126,6 +152,8 @@ const MOCK_MODULES: ModuleWithArtist[] = [
     file_name: "doomsday.xm",
     module_name: "Doomsday Zone",
     md5: "stu901",
+    local_path: null,
+    favorite: 0,
     artist_name: "Jester",
     genres: ["techno"],
   },
@@ -135,6 +163,8 @@ const MOCK_MODULES: ModuleWithArtist[] = [
     file_name: "ocean.s3m",
     module_name: "Ocean Machine",
     md5: "vwx234",
+    local_path: null,
+    favorite: 0,
     artist_name: "Dune",
     genres: ["ambient"],
   },
@@ -144,6 +174,8 @@ const MOCK_MODULES: ModuleWithArtist[] = [
     file_name: "catchme.s3m",
     module_name: "Catch Me",
     md5: "yza567",
+    local_path: null,
+    favorite: 0,
     artist_name: "Skaven",
     genres: ["techno", "electronic"],
   },
@@ -153,6 +185,8 @@ const MOCK_MODULES: ModuleWithArtist[] = [
     file_name: "world_of.xm",
     module_name: "World of Dreams",
     md5: "bcd890",
+    local_path: null,
+    favorite: 0,
     artist_name: "Purple Motion",
     genres: ["trance"],
   },
@@ -162,6 +196,8 @@ const MOCK_MODULES: ModuleWithArtist[] = [
     file_name: "hyperventilation.xm",
     module_name: "Hyperventilation",
     md5: "efg123",
+    local_path: null,
+    favorite: 0,
     artist_name: "Nuke",
     genres: ["techno", "trance"],
   },
@@ -171,6 +207,8 @@ const MOCK_MODULES: ModuleWithArtist[] = [
     file_name: "thrill.xm",
     module_name: "The Thrill",
     md5: "hij456",
+    local_path: null,
+    favorite: 0,
     artist_name: "Necros",
     genres: ["electronic"],
   },
@@ -180,6 +218,8 @@ const MOCK_MODULES: ModuleWithArtist[] = [
     file_name: "wonderland.xm",
     module_name: "Wonderland",
     md5: "klm789",
+    local_path: null,
+    favorite: 0,
     artist_name: "Lizardking",
     genres: ["ambient"],
   },
@@ -189,6 +229,8 @@ const MOCK_MODULES: ModuleWithArtist[] = [
     file_name: "frantic.xm",
     module_name: "Frantic",
     md5: "nop012",
+    local_path: null,
+    favorite: 0,
     artist_name: "Basehead",
     genres: ["chiptune"],
   },
@@ -198,6 +240,8 @@ const MOCK_MODULES: ModuleWithArtist[] = [
     file_name: "dawn.xm",
     module_name: "Dawn",
     md5: "qrs345",
+    local_path: null,
+    favorite: 0,
     artist_name: "Elwood",
     genres: ["ambient", "trance"],
   },
@@ -211,6 +255,8 @@ const MOCK_GENRES: Genre[] = [
   { id: 5, name: "chiptune", module_count: 2 },
 ];
 
+// ─── Init & migrations ────────────────────────────────────────────────────────
+
 export async function initDb(dbPath?: string): Promise<void> {
   if (dbPath && fs.existsSync(dbPath)) {
     try {
@@ -218,10 +264,17 @@ export async function initDb(dbPath?: string): Promise<void> {
       const SQL = await initSqlJs();
       const fileBuffer = fs.readFileSync(dbPath);
       db = new SQL.Database(fileBuffer);
-      // Migrate: add local_path column if not present
+      currentDbPath = dbPath;
+      // Migrations — idempotent
       try {
         db.run(`ALTER TABLE modules ADD COLUMN local_path TEXT`);
       } catch (_) {}
+      try {
+        db.run(
+          `ALTER TABLE modules ADD COLUMN favorite INTEGER NOT NULL DEFAULT 0`,
+        );
+      } catch (_) {}
+      saveDb();
       useMock = false;
       return;
     } catch (e) {
@@ -231,15 +284,26 @@ export async function initDb(dbPath?: string): Promise<void> {
   useMock = true;
 }
 
+// ─── Helpers ──────────────────────────────────────────────────────────────────
+
+const SEL_MODULE = `m.id, m.artist_id, m.file_name, m.module_name, m.md5, m.local_path, COALESCE(m.favorite, 0) as favorite`;
+
+function rowToModule(r: any, artistName: string): ModuleWithArtist {
+  return {
+    ...r,
+    favorite: Number(r.favorite ?? 0),
+    artist_name: artistName,
+    genres: getGenresForModule(r.id),
+  };
+}
+
+// ─── Artists ─────────────────────────────────────────────────────────────────
+
 export function getTopArtists(limit = 9999): Artist[] {
   if (useMock) return MOCK_ARTISTS.slice(0, limit);
-  const stmt = db.prepare(`
-    SELECT id, name, module_count, rating, rating_count
-    FROM artists
-    WHERE rating IS NOT NULL
-    ORDER BY rating DESC
-    LIMIT ?
-  `);
+  const stmt = db.prepare(
+    `SELECT id, name, module_count, rating, rating_count FROM artists WHERE rating IS NOT NULL ORDER BY rating DESC LIMIT ?`,
+  );
   stmt.bind([limit]);
   const rows: Artist[] = [];
   while (stmt.step()) rows.push(stmt.getAsObject() as any);
@@ -271,35 +335,39 @@ export function searchArtists(query: string, limit = 9999): Artist[] {
   return rows;
 }
 
+export function getArtistById(id: string): Artist | null {
+  if (useMock) return MOCK_ARTISTS.find((a) => a.id === id) ?? null;
+  const stmt = db.prepare(
+    `SELECT id, name, module_count, rating, rating_count FROM artists WHERE id = ?`,
+  );
+  stmt.bind([id]);
+  if (stmt.step()) return stmt.getAsObject() as any;
+  return null;
+}
+
+// ─── Modules ─────────────────────────────────────────────────────────────────
+
 export function getModulesByArtist(artistId: string): ModuleWithArtist[] {
   if (useMock) return MOCK_MODULES.filter((m) => m.artist_id === artistId);
   const artist = getArtistById(artistId);
   const stmt = db.prepare(
-    `SELECT id, artist_id, file_name, module_name, md5, local_path FROM modules WHERE artist_id = ?`,
+    `SELECT id, artist_id, file_name, module_name, md5, local_path, COALESCE(favorite, 0) as favorite FROM modules WHERE artist_id = ?`,
   );
   stmt.bind([artistId]);
-  const rows: Module[] = [];
-  while (stmt.step()) rows.push(stmt.getAsObject() as any);
-  return rows.map((m) => ({
-    ...m,
-    artist_name: artist?.name ?? "",
-    genres: getGenresForModule(m.id),
-  }));
+  const rows: any[] = [];
+  while (stmt.step()) rows.push(stmt.getAsObject());
+  return rows.map((r) => rowToModule(r, artist?.name ?? ""));
 }
 
 export function getRecentModules(limit = 9999): ModuleWithArtist[] {
   if (useMock) return MOCK_MODULES.slice(0, limit);
-  const stmt = db.prepare(`
-    SELECT m.id, m.artist_id, m.file_name, m.module_name, m.md5, m.local_path, a.name as artist_name
-    FROM modules m
-    JOIN artists a ON m.artist_id = a.id
-    WHERE m.module_name IS NOT NULL
-    LIMIT ?
-  `);
+  const stmt = db.prepare(
+    `SELECT ${SEL_MODULE}, a.name as artist_name FROM modules m JOIN artists a ON m.artist_id = a.id WHERE m.module_name IS NOT NULL LIMIT ?`,
+  );
   stmt.bind([limit]);
   const rows: any[] = [];
   while (stmt.step()) rows.push(stmt.getAsObject());
-  return rows.map((r) => ({ ...r, genres: getGenresForModule(r.id) }));
+  return rows.map((r) => rowToModule(r, r.artist_name));
 }
 
 export function searchModules(query: string, limit = 9999): ModuleWithArtist[] {
@@ -312,17 +380,13 @@ export function searchModules(query: string, limit = 9999): ModuleWithArtist[] {
         m.artist_name.toLowerCase().includes(q),
     );
   }
-  const stmt = db.prepare(`
-    SELECT m.id, m.artist_id, m.file_name, m.module_name, m.md5, m.local_path, a.name as artist_name
-    FROM modules m
-    JOIN artists a ON m.artist_id = a.id
-    WHERE m.module_name LIKE ? OR m.file_name LIKE ? OR a.name LIKE ?
-    LIMIT ?
-  `);
+  const stmt = db.prepare(
+    `SELECT ${SEL_MODULE}, a.name as artist_name FROM modules m JOIN artists a ON m.artist_id = a.id WHERE m.module_name LIKE ? OR m.file_name LIKE ? OR a.name LIKE ? LIMIT ?`,
+  );
   stmt.bind([`%${query}%`, `%${query}%`, `%${query}%`, limit]);
   const rows: any[] = [];
   while (stmt.step()) rows.push(stmt.getAsObject());
-  return rows.map((r) => ({ ...r, genres: getGenresForModule(r.id) }));
+  return rows.map((r) => rowToModule(r, r.artist_name));
 }
 
 export function getModulesByGenre(
@@ -334,30 +398,72 @@ export function getModulesByGenre(
       0,
       limit,
     );
-  const stmt = db.prepare(`
-    SELECT m.id, m.artist_id, m.file_name, m.module_name, m.md5, m.local_path, a.name as artist_name
-    FROM modules m
-    JOIN artists a ON m.artist_id = a.id
-    JOIN module_genres mg ON m.id = mg.module_id
-    JOIN genres g ON mg.genre_id = g.id
-    WHERE g.name = ?
-    LIMIT ?
-  `);
+  const stmt = db.prepare(
+    `SELECT ${SEL_MODULE}, a.name as artist_name FROM modules m JOIN artists a ON m.artist_id = a.id JOIN module_genres mg ON m.id = mg.module_id JOIN genres g ON mg.genre_id = g.id WHERE g.name = ? LIMIT ?`,
+  );
   stmt.bind([genreName, limit]);
   const rows: any[] = [];
   while (stmt.step()) rows.push(stmt.getAsObject());
-  return rows.map((r) => ({ ...r, genres: getGenresForModule(r.id) }));
+  return rows.map((r) => rowToModule(r, r.artist_name));
 }
+
+export function setModuleLocalPath(moduleId: string, localPath: string): void {
+  if (useMock) {
+    const m = MOCK_MODULES.find((m) => m.id === moduleId);
+    if (m) m.local_path = localPath;
+    return;
+  }
+  db.run(`UPDATE modules SET local_path = ? WHERE id = ?`, [
+    localPath,
+    moduleId,
+  ]);
+  saveDb();
+}
+
+// ─── Favorites ────────────────────────────────────────────────────────────────
+
+export function setModuleFavorite(moduleId: string, favorite: boolean): void {
+  if (useMock) {
+    const m = MOCK_MODULES.find((m) => m.id === moduleId);
+    if (m) m.favorite = favorite ? 1 : 0;
+    return;
+  }
+  db.run(`UPDATE modules SET favorite = ? WHERE id = ?`, [
+    favorite ? 1 : 0,
+    moduleId,
+  ]);
+  saveDb();
+}
+
+export function getFavorites(): ModuleWithArtist[] {
+  if (useMock) return MOCK_MODULES.filter((m) => m.favorite === 1);
+  const stmt = db.prepare(
+    `SELECT ${SEL_MODULE}, a.name as artist_name FROM modules m JOIN artists a ON m.artist_id = a.id WHERE m.favorite = 1 ORDER BY a.name, m.module_name`,
+  );
+  const rows: any[] = [];
+  while (stmt.step()) rows.push(stmt.getAsObject());
+  return rows.map((r) => rowToModule(r, r.artist_name));
+}
+
+// ─── Downloaded playlist ──────────────────────────────────────────────────────
+
+export function getDownloadedModules(): ModuleWithArtist[] {
+  if (useMock) return MOCK_MODULES.filter((m) => m.local_path !== null);
+  const stmt = db.prepare(
+    `SELECT ${SEL_MODULE}, a.name as artist_name FROM modules m JOIN artists a ON m.artist_id = a.id WHERE m.local_path IS NOT NULL ORDER BY a.name, m.module_name`,
+  );
+  const rows: any[] = [];
+  while (stmt.step()) rows.push(stmt.getAsObject());
+  return rows.map((r) => rowToModule(r, r.artist_name));
+}
+
+// ─── Genres ───────────────────────────────────────────────────────────────────
 
 export function getAllGenres(): Genre[] {
   if (useMock) return MOCK_GENRES;
-  const stmt = db.prepare(`
-    SELECT g.id, g.name, COUNT(mg.module_id) as module_count
-    FROM genres g
-    LEFT JOIN module_genres mg ON g.id = mg.genre_id
-    GROUP BY g.id, g.name
-    ORDER BY g.name
-  `);
+  const stmt = db.prepare(
+    `SELECT g.id, g.name, COUNT(mg.module_id) as module_count FROM genres g LEFT JOIN module_genres mg ON g.id = mg.genre_id GROUP BY g.id, g.name ORDER BY g.name`,
+  );
   const rows: Genre[] = [];
   while (stmt.step()) rows.push(stmt.getAsObject() as any);
   return rows;
@@ -365,41 +471,16 @@ export function getAllGenres(): Genre[] {
 
 export function getGenresForModule(moduleId: string): string[] {
   if (useMock) return MOCK_MODULES.find((m) => m.id === moduleId)?.genres ?? [];
-  const stmt = db.prepare(`
-    SELECT g.name FROM genres g
-    JOIN module_genres mg ON g.id = mg.genre_id
-    WHERE mg.module_id = ?
-  `);
+  const stmt = db.prepare(
+    `SELECT g.name FROM genres g JOIN module_genres mg ON g.id = mg.genre_id WHERE mg.module_id = ?`,
+  );
   stmt.bind([moduleId]);
   const names: string[] = [];
-  while (stmt.step()) {
-    const row = stmt.getAsObject() as any;
-    names.push(row.name);
-  }
+  while (stmt.step()) names.push((stmt.getAsObject() as any).name);
   return names;
 }
 
-export function getArtistById(id: string): Artist | null {
-  if (useMock) return MOCK_ARTISTS.find((a) => a.id === id) ?? null;
-  const stmt = db.prepare(
-    `SELECT id, name, module_count, rating, rating_count FROM artists WHERE id = ?`,
-  );
-  stmt.bind([id]);
-  if (stmt.step()) return stmt.getAsObject() as any;
-  return null;
-}
-
-export function setModuleLocalPath(moduleId: string, localPath: string): void {
-  if (useMock) {
-    const m = MOCK_MODULES.find((m) => m.id === moduleId);
-    if (m) (m as any).local_path = localPath;
-    return;
-  }
-  db.run(`UPDATE modules SET local_path = ? WHERE id = ?`, [
-    localPath,
-    moduleId,
-  ]);
-}
+// ─── Stats ────────────────────────────────────────────────────────────────────
 
 export function getDbStats(): {
   artists: number;
