@@ -330,55 +330,36 @@ function PlayerBar({ playerState }: { playerState: Player.PlayerState }) {
     status === "playing" ? "green" : status === "paused" ? "yellow" : "gray";
 
   return (
-    <Box
-      flexDirection="column"
-      borderStyle="single"
-      borderColor="green"
-      paddingX={1}
-    >
-      <Box justifyContent="space-between" gap={2}>
-        {/* Now playing */}
-        <Box flexDirection="row" gap={1} width={40}>
-          <Text color={statusColor} bold>
-            {statusIcon}
-          </Text>
-          {track ? (
-            <Box flexDirection="column">
-              <Text color="white" bold>
-                {truncate(track.module_name ?? track.file_name, 28)}
-              </Text>
-              <Text dimColor>{truncate(track.artist_name, 28)}</Text>
-            </Box>
-          ) : (
-            <Text dimColor italic>
-              No track selected
-            </Text>
-          )}
+    <Box flexDirection="column" borderStyle="single" borderColor="green" paddingX={1}>
+      {/* Row 1: Controls — always visible */}
+      <Box justifyContent="space-between">
+        <Box gap={2}>
+          <Text dimColor>[,]Prev</Text>
+          <Text color="white">[Space]</Text>
+          <Text dimColor>[N]ext</Text>
+          <Text color={playerState.shuffle ? "green" : "gray"}>[Z]{playerState.shuffle ? " shuffle ON" : " shuffle"}</Text>
         </Box>
-
-        {/* Progress */}
-        <Box flexDirection="column" alignItems="center" gap={0}>
-          <Box gap={1}>
-            <Text dimColor>[P]rev</Text>
-            <Text color="white">[Space]</Text>
-            <Text dimColor>[N]ext</Text>
-          </Box>
-          <ProgressBar percent={progress} width={32} />
-          <Text dimColor>
-            {fmtTime(elapsed)}
-            {duration > 0 ? ` / ${fmtTime(duration)}` : ""}
-          </Text>
-        </Box>
-
-        {/* Volume */}
-        <Box flexDirection="column" alignItems="flex-end" gap={0}>
-          <Text dimColor>Vol [-/+]</Text>
-          <VolumeBar vol={volume} />
-          <Text dimColor>{volume}%</Text>
+        <Box gap={2}>
+          <Text dimColor>Vol [-/+] {volume}%</Text>
         </Box>
       </Box>
-
-      {/* Genres */}
+      {/* Row 2: Now playing + progress + volume */}
+      <Box gap={2}>
+        <Text color={statusColor} bold>{statusIcon}</Text>
+        {track ? (
+          <>
+            <Text color="white" bold>{truncate(track.module_name ?? track.file_name, 26)}</Text>
+            <Text dimColor>{truncate(track.artist_name, 20)}</Text>
+          </>
+        ) : (
+          <Text dimColor italic>No track selected</Text>
+        )}
+        <Box flexGrow={1} />
+        <ProgressBar percent={progress} width={24} />
+        <Text dimColor>{fmtTime(elapsed)}{duration > 0 ? ` / ${fmtTime(duration)}` : ""}</Text>
+        <VolumeBar vol={volume} />
+      </Box>
+      {/* Row 3: Genres */}
       {track && track.genres.length > 0 && (
         <Text dimColor> ♪ {track.genres.join(" · ")}</Text>
       )}
@@ -440,11 +421,13 @@ function TrackList({
   selectedIdx,
   title,
   showArtist = true,
+  currentTrackId,
 }: {
   modules: ModuleWithArtist[];
   selectedIdx: number;
   title: string;
   showArtist?: boolean;
+  currentTrackId?: string | null;
 }) {
   const rows = (process.stdout.rows ?? 40) - 10;
   const start = Math.max(0, selectedIdx - Math.floor(rows / 2));
@@ -461,16 +444,18 @@ function TrackList({
       {visible.map((m, i) => {
         const realIdx = start + i;
         const isSelected = realIdx === selectedIdx;
+        const isPlaying = currentTrackId != null && m.id === currentTrackId;
+        const rowColor = isSelected ? "green" : isPlaying ? "blueBright" : "white";
         return (
           <Box key={m.id} paddingX={1} gap={1}>
-            <Text color={isSelected ? "green" : "white"}>
-              {isSelected ? "▸" : " "} {pad(String(realIdx + 1), 3)}
+            <Text color={rowColor}>
+              {isSelected ? "▸" : isPlaying ? "♪" : " "} {pad(String(realIdx + 1), 3)}
             </Text>
-            <Text color={isSelected ? "green" : "white"} bold={isSelected}>
+            <Text color={rowColor} bold={isSelected || isPlaying}>
               {pad(truncate(m.module_name ?? m.file_name, 28), 29)}
             </Text>
             {showArtist && (
-              <Text color={isSelected ? "white" : "gray"}>
+              <Text color={isSelected ? "white" : isPlaying ? "blueBright" : "gray"}>
                 {pad(truncate(m.artist_name, 18), 19)}
               </Text>
             )}
@@ -697,8 +682,6 @@ interface AppState {
   searchResults: ModuleWithArtist[];
   favorites: ModuleWithArtist[];
   downloaded: ModuleWithArtist[];
-  allModules: ModuleWithArtist[];
-  allArtists: Artist[];
   searchArtistResults: Artist[];
   searchMode: "tracks" | "artists";
   // Library
@@ -762,14 +745,8 @@ export default function App({ dbPath }: { dbPath?: string }) {
       const favorites = getFavorites();
       const downloaded = getDownloadedModules();
       setState((s) => ({
-        ...s,
-        stats,
-        genres,
-        artists,
-        allModules,
-        allArtists,
-        favorites,
-        downloaded,
+        ...s, stats, genres, artists,
+        allModules, allArtists, favorites, downloaded,
         searchResults: allModules,
         searchArtistResults: allArtists,
       }));
@@ -1044,9 +1021,9 @@ export default function App({ dbPath }: { dbPath?: string }) {
         return s.playerState.queue.length;
       case "favorites":
       case "playlist_favorites":
-        return s.favorites.length;
+        return (s.favorites ?? []).length;
       case "playlist_downloaded":
-        return s.downloaded.length;
+        return (s.downloaded ?? []).length;
       case "playlists":
         return 2;
       default:
@@ -1068,19 +1045,16 @@ export default function App({ dbPath }: { dbPath?: string }) {
         return state.playerState.queue[state.selectedIdx] ?? null;
       case "favorites":
       case "playlist_favorites":
-        return state.favorites[state.selectedIdx] ?? null;
+        return (state.favorites ?? [])[state.selectedIdx] ?? null;
       case "playlist_downloaded":
-        return state.downloaded[state.selectedIdx] ?? null;
+        return (state.downloaded ?? [])[state.selectedIdx] ?? null;
       default:
         return null;
     }
   }
 
   const playingRef = React.useRef(false);
-  function triggerDownloadAndPlay(
-    track: ModuleWithArtist,
-    onReady: () => void,
-  ) {
+  function triggerDownloadAndPlay(track: ModuleWithArtist, onReady: () => void) {
     if (playingRef.current) return;
     playingRef.current = true;
     downloadModule(track, ({ file, status, error }) => {
@@ -1088,16 +1062,10 @@ export default function App({ dbPath }: { dbPath?: string }) {
       if (status === "done" || status === "exists") {
         playingRef.current = false;
         onReady();
-        setTimeout(
-          () => setState((s) => ({ ...s, downloadStatus: null })),
-          3000,
-        );
+        setTimeout(() => setState((s) => ({ ...s, downloadStatus: null })), 3000);
       } else if (status === "error") {
         playingRef.current = false;
-        setTimeout(
-          () => setState((s) => ({ ...s, downloadStatus: null })),
-          3000,
-        );
+        setTimeout(() => setState((s) => ({ ...s, downloadStatus: null })), 3000);
       }
     });
   }
@@ -1324,6 +1292,7 @@ export default function App({ dbPath }: { dbPath?: string }) {
                 <TrackList
                   modules={state.searchResults}
                   selectedIdx={state.selectedIdx}
+                  currentTrackId={state.playerState.queue[state.playerState.currentIndex]?.id}
                   title={
                     state.searchResults.length > 0
                       ? `Tracks (${state.searchResults.length})`
@@ -1398,6 +1367,7 @@ export default function App({ dbPath }: { dbPath?: string }) {
               <TrackList
                 modules={state.artistModules}
                 selectedIdx={state.selectedIdx}
+                  currentTrackId={state.playerState.queue[state.playerState.currentIndex]?.id}
                 title={`Tracks (${state.artistModules.length})`}
                 showArtist={false}
               />
@@ -1415,6 +1385,7 @@ export default function App({ dbPath }: { dbPath?: string }) {
               <TrackList
                 modules={state.genreModules}
                 selectedIdx={state.selectedIdx}
+                  currentTrackId={state.playerState.queue[state.playerState.currentIndex]?.id}
                 title={`Tracks in ${state.focusedGenre.name} (${state.genreModules.length})`}
               />
             </Box>
@@ -1554,6 +1525,7 @@ export default function App({ dbPath }: { dbPath?: string }) {
                 <TrackList
                   modules={state.playerState.queue}
                   selectedIdx={state.selectedIdx}
+                  currentTrackId={state.playerState.queue[state.playerState.currentIndex]?.id}
                   title=""
                 />
               )}
